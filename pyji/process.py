@@ -1,6 +1,10 @@
 
-# find factors of n
 def get_factor(n):
+    '''
+    Find factors of n
+    Return:
+        a list of factors
+    '''
     tempn = n
     f = 2
     factor = []
@@ -14,8 +18,14 @@ def get_factor(n):
     factor.append(int(tempn))
     return factor
 
-# downsample a trace to sr
-def downsample(tr, sr=1): #para
+
+
+def downsample(tr, sr=1):
+    '''
+    Downsample a trace
+    Return:
+        trace
+    '''
     freq = round(tr.stats.sampling_rate,0)
 
     if freq == sr:
