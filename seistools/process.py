@@ -1,4 +1,3 @@
-
 def get_factor(n):
     '''
     Find factors of n

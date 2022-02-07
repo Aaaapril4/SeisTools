@@ -4,7 +4,6 @@ from obspy.core.utcdatetime import UTCDateTime
 from obspy.clients.fdsn.mass_downloader import RectangularDomain,Restrictions,MassDownloader
 
 import numpy as np
-import configparser
 import os
 import multiprocessing as mp
 from tqdm import tqdm
@@ -26,7 +25,7 @@ def get_station():
     Netinv = client.get_stations(
         network = para["Station Info"].get("network", "*"),
         station = para["Station Info"].get("station", "*"),
-        channel = para["Station Info"].get("channel", "*"),
+        channel = para["Station Info"].get("channelpri", "*"),
         starttime = para["Station Info"].get("starttime", "19900101T00:00:00"),
         endtime = para["Station Info"].get("endtime", UTCDateTime.now()),
         maxlatitude = para["Map Info"].getfloat("maxlatitude"),
@@ -34,6 +33,13 @@ def get_station():
         maxlongitude = para["Map Info"].getfloat("maxlongitude"),
         minlongitude = para["Map Info"].getfloat("minlongitude")
     )
+
+    filter_net = para["Station Info"].get("network_filter").split(",")
+    for net in filter_net:
+        Netinv = Netinv.remove(network=net)
+
+    if para["Save Data"].getboolean("stationinfo"):
+        Netinv.write(f'{para["DEFAULT"].get("projdir")}/station.txt', format="STATIONTXT", level='station')
 
     return Netinv
 
@@ -65,6 +71,9 @@ def get_event(minradius, maxradius, minmag):
                 "namespace":"http://test.org/xmlns/1.0"}}
         event.extra = extra
     
+    if para["Save Data"].getboolean("eventcatlog"):
+        cat.write(f'{para["DEFAULT"].get("projdir")}/evcatalog.xml', format="QUAKEML")
+    
     return cat
 
 
@@ -86,6 +95,15 @@ def _get_nettime(nw):
 
 
 
+def get_nettime(Netinv):
+    nettime = []
+    for nw in Netinv:
+        starttime, endtime = _get_nettime(nw)
+        nettime.append((nw.code, starttime, endtime))
+    return nettime
+
+
+
 def _get_downloadlist(Netinv):
     '''
     Split the network time into several slots for parallal downloading
@@ -94,6 +112,7 @@ def _get_downloadlist(Netinv):
     '''
 
     downloadlist = []
+    nettime = get_nettime(Netinv)
     for nw in Netinv:
         starttime, endtime = _get_nettime(nw)
         stationday = len(nw) * (endtime - starttime) / 60 / 60 / 24
@@ -105,7 +124,7 @@ def _get_downloadlist(Netinv):
             interval = np.ceil((endtime - starttime) / num)
             timeslot = np.arange(starttime, endtime+1, interval)
             if endtime not in timeslot:
-                timeslot = timeslot.append(endtime)
+                timeslot = np.append(timeslot, endtime)
 
             for i in range(len(timeslot)-1):
                 downloadlist.append((nw.code, timeslot[i], timeslot[i+1]))
@@ -124,10 +143,10 @@ def _download_cont(nw, starttime, endtime):
     restrictions = Restrictions(
         starttime = starttime,
         endtime = endtime,
-        chunklength_in_sec = 86400,
+        chunklength_in_sec = para["Station Info"].getint("chunksize", 1) * 24 * 60 * 60,
         network = nw,
         station = para["Station Info"].get("station", "*"),
-        channel_priorities = ["LH?", "BH?", "HH?"],
+        channel_priorities = para["Station Info"].get("channelpri", "*").split(","),
         reject_channels_with_gaps = True,
         minimum_length = 0.1,
         minimum_interstation_distance_in_m = 100.0)
@@ -136,8 +155,8 @@ def _download_cont(nw, starttime, endtime):
     mdl.download(
         domain, 
         restrictions, 
-        mseed_storage = f'{para["DEFAULT"].get("projdir")}/data/amnoise/waveform', 
-        stationxml_storage = f'{para["DEFAULT"].get("projdir")}/data/amnoise/station')
+        mseed_storage = para["DEFAULT"].get("projdir") + "/data/continuous/waveform/{network}/{station}/{network}.{station}.{location}.{channel}__{starttime}__{endtime}.mseed", 
+        stationxml_storage = para["DEFAULT"].get("projdir") + "/data/continuous/station/{network}.{station}.xml")
 
     return
 
@@ -152,14 +171,16 @@ def download_cont():
 
     Netinv = get_station()
     if para["DEFAULT"].getint("ncpu") == 1:
-        downloadlist = [(para["Station Info"].get("network", "*"), para["Station Info"].get("starttime", "19900101T00:00:00"), para["Station Info"].get("endtime", UTCDateTime.now()))]
+        downloadlist = get_nettime(Netinv)
+        for i in range(len(downloadlist)):
+            _download_cont(*downloadlist[i])
     else:
         downloadlist = _get_downloadlist(Netinv)
+        with mp.Pool(para["DEFAULT"].getint("ncpu")) as p:
+            list(tqdm(p.starmap(_download_cont, downloadlist),total=len(downloadlist)))
     
-    with mp.Pool(para["DEFAULT"].getint("ncpu")) as p:
-        list(tqdm(p.starmap(_download_cont, downloadlist),total=len(downloadlist)))
-    
-    saveasdf("amnoise", f'{para["DEFAULT"].get("projdir")}/data/amnoise/waveform', Netinv)
+    if para["Save Data"].getboolean("asdffile"):
+        saveasdf("amnoise", f'{para["DEFAULT"].get("projdir")}/data/amnoise/waveform', Netinv)
 
     return
 
@@ -177,9 +198,9 @@ def _download_event(eventtime, starttime, endtime):
                         endtime = eventtime + endtime * 60,
                         network = para["Station Info"].get("network", "*"),
                         station = para["Station Info"].get("station", "*"),
-                        reject_channels_with_gaps = True,
-                        minimum_length = 0.1,
-                        channel_priorities = ["BH?", "HH?"])
+                        reject_channels_with_gaps = False,
+                        minimum_length = 0.0,
+                        channel_priorities = para["Station Info"].get("channelpri", "*").split(","))
 
     mdl = MassDownloader(providers=["IRIS"])
     mdl.download(
@@ -225,8 +246,8 @@ def download_event():
     cat_new.clear()
     for event in cat_list:
         cat_new.append(event)
-
-    saveasdf("teleseismic", f'{para["DEFAULT"].get("projdir")}/data/tele/waveform', f'{para["DEFAULT"].get("projdir")}/data/tele/station', cat_new)
+    if para["Save Data"].getboolean("asdffile"):
+        saveasdf("teleseismic", f'{para["DEFAULT"].get("projdir")}/data/tele/waveform', f'{para["DEFAULT"].get("projdir")}/data/tele/station', cat_new)
 
     return
 
@@ -272,5 +293,6 @@ def saveasdf(filename, mseeddir, stationdir, eventdir = None):
 
 
 if __name__ == '__main__':
-    download_event()
+    # download_event()
+    
     download_cont()
