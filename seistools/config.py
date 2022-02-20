@@ -1,6 +1,5 @@
 from obspy.clients.fdsn.mass_downloader import RectangularDomain
 import configparser
-import sys
 
 para = configparser.ConfigParser()
 para.read('para.ini')

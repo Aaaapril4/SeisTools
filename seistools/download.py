@@ -1,7 +1,7 @@
 import obspy
 from obspy.clients.fdsn import Client
 from obspy.core.utcdatetime import UTCDateTime
-from obspy.clients.fdsn.mass_downloader import RectangularDomain,Restrictions,MassDownloader
+from obspy.clients.fdsn.mass_downloader import Restrictions,MassDownloader
 
 import numpy as np
 import os
@@ -45,7 +45,7 @@ def get_station():
 
 
 
-def get_event(minradius, maxradius, minmag):
+def get_event_radius(minradius, maxradius, minmag):
     '''
     Get all the events in time range
     Return:
@@ -112,7 +112,6 @@ def _get_downloadlist(Netinv):
     '''
 
     downloadlist = []
-    nettime = get_nettime(Netinv)
     for nw in Netinv:
         starttime, endtime = _get_nettime(nw)
         stationday = len(nw) * (endtime - starttime) / 60 / 60 / 24
@@ -139,7 +138,7 @@ def _download_cont(nw, starttime, endtime):
     Return:
         None
     '''
-
+    print(f'======Download data for network {nw}: {starttime} - {endtime}======')
     restrictions = Restrictions(
         starttime = starttime,
         endtime = endtime,
@@ -147,16 +146,16 @@ def _download_cont(nw, starttime, endtime):
         network = nw,
         station = para["Station Info"].get("station", "*"),
         channel_priorities = para["Station Info"].get("channelpri", "*").split(","),
-        reject_channels_with_gaps = True,
-        minimum_length = 0.1,
+        reject_channels_with_gaps = False,
+        minimum_length = 0.0,
         minimum_interstation_distance_in_m = 100.0)
 
     mdl = MassDownloader(providers=["IRIS"])
     mdl.download(
         domain, 
         restrictions, 
-        mseed_storage = para["DEFAULT"].get("projdir") + "/data/continuous/waveform/{network}/{station}/{network}.{station}.{location}.{channel}__{starttime}__{endtime}.mseed", 
-        stationxml_storage = para["DEFAULT"].get("projdir") + "/data/continuous/station/{network}.{station}.xml")
+        mseed_storage = para["DEFAULT"].get("projdir") + "/waveform/{station}/{network}.{station}.{location}.{channel}__{starttime}__{endtime}.mseed", 
+        stationxml_storage = para["DEFAULT"].get("projdir") + "/station/{network}.{station}.xml")
 
     return
 
@@ -170,17 +169,16 @@ def download_cont():
     '''
 
     Netinv = get_station()
+    downloadlist = _get_downloadlist(Netinv)
     if para["DEFAULT"].getint("ncpu") == 1:
-        downloadlist = get_nettime(Netinv)
         for i in range(len(downloadlist)):
             _download_cont(*downloadlist[i])
     else:
-        downloadlist = _get_downloadlist(Netinv)
         with mp.Pool(para["DEFAULT"].getint("ncpu")) as p:
             list(tqdm(p.starmap(_download_cont, downloadlist),total=len(downloadlist)))
     
     if para["Save Data"].getboolean("asdffile"):
-        saveasdf("amnoise", f'{para["DEFAULT"].get("projdir")}/data/amnoise/waveform', Netinv)
+        saveasdf("amnoise", f'{para["DEFAULT"].get("projdir")}/waveform', Netinv)
 
     return
 
@@ -206,8 +204,8 @@ def _download_event(eventtime, starttime, endtime):
     mdl.download(
         domain, 
         restrictions, 
-        mseed_storage = f'{para["DEFAULT"].get("projdir")}/data/tele/waveform', 
-        stationxml_storage = f'{para["DEFAULT"].get("projdir")}/data/tele/station')
+        mseed_storage = f'{para["DEFAULT"].get("projdir")}/waveform', 
+        stationxml_storage = f'{para["DEFAULT"].get("projdir")}/station')
     return
 
 
@@ -238,7 +236,7 @@ def download_event():
         None
     '''
 
-    cat = get_event(30,90,6)
+    cat = get_event_radius(30,90,6)
     with mp.Pool(para["DEFAULT"].getint("ncpu")) as p:
         cat_list = list(tqdm(p.imap(_download_each_event, [event for event in cat]),total=len(cat)))
     
@@ -247,7 +245,7 @@ def download_event():
     for event in cat_list:
         cat_new.append(event)
     if para["Save Data"].getboolean("asdffile"):
-        saveasdf("teleseismic", f'{para["DEFAULT"].get("projdir")}/data/tele/waveform', f'{para["DEFAULT"].get("projdir")}/data/tele/station', cat_new)
+        saveasdf("teleseismic", f'{para["DEFAULT"].get("projdir")}/waveform', f'{para["DEFAULT"].get("projdir")}/station', cat_new)
 
     return
 
