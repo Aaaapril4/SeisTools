@@ -122,7 +122,7 @@ def _get_downloadlist(Netinv):
             num = np.ceil(stationday / 50 / 365)
             interval = np.ceil((endtime - starttime) / num)
             timeslot = np.arange(starttime, endtime+1, interval)
-            if endtime not in timeslot:
+            if endtime > timeslot[-1]:
                 timeslot = np.append(timeslot, endtime)
 
             for i in range(len(timeslot)-1):
