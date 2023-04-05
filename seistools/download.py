@@ -8,6 +8,7 @@ import os
 import multiprocessing as mp
 from tqdm import tqdm
 import pyasdf
+import calendar
 
 from .config import domain, para
 
@@ -110,23 +111,26 @@ def _get_downloadlist(Netinv):
     Return:
         list of tunnel (networkname, begintime, endtime)
     '''
-
-    downloadlist = []
-    for nw in Netinv:
-        starttime, endtime = _get_nettime(nw)
-        stationday = len(nw) * (endtime - starttime) / 60 / 60 / 24
+    try:
+        chunksize = int(para["Station Info"].get("chunksize", 1))
+    except ValueError:
+        if para["Station Info"].get("chunksize").lower() != "mon":
+            raise ValueError("Chunksize is invalid")
         
-        if stationday <= 50 * 365:
-            downloadlist.append((nw.code, starttime, endtime))
-        elif stationday > 50 * 365:
-            num = np.ceil(stationday / 50 / 365)
-            interval = np.ceil((endtime - starttime) / num)
-            timeslot = np.arange(starttime, endtime+1, interval)
-            if endtime > timeslot[-1]:
-                timeslot = np.append(timeslot, endtime)
-
-            for i in range(len(timeslot)-1):
-                downloadlist.append((nw.code, timeslot[i], timeslot[i+1]))
+        downloadlist = []
+        for nw in Netinv:
+            starttime, endtime = _get_nettime(nw)
+            d_begin = UTCDateTime(starttime.year, starttime.month, 1)
+            while d_begin < endtime:
+                d_end = d_begin + calendar.monthrange(d_begin.year, d_begin.month)[1] * 60 * 60 * 24 - 1e-6
+                downloadlist.append((nw.code, d_begin, d_end))
+                d_begin = d_end + 1
+        
+    else:
+        downloadlist = []
+        for nw in Netinv:
+            starttime, endtime = _get_nettime(nw)
+            downloadlist.append((nw.code, UTCDateTime(starttime.strftime('%Y%m%d')), UTCDateTime(endtime.strftime('%Y%m%d')) + 60*60*24))
     
     return downloadlist
 
@@ -139,16 +143,33 @@ def _download_cont(nw, starttime, endtime):
         None
     '''
     print(f'======Download data for network {nw}: {starttime} - {endtime}======')
-    restrictions = Restrictions(
-        starttime = starttime,
-        endtime = endtime,
-        chunklength_in_sec = para["Station Info"].getint("chunksize", 1) * 24 * 60 * 60,
-        network = nw,
-        station = para["Station Info"].get("station", "*"),
-        channel_priorities = para["Station Info"].get("channelpri", "*").split(","),
-        reject_channels_with_gaps = False,
-        minimum_length = 0.0,
-        minimum_interstation_distance_in_m = 100.0)
+    try:
+        chunksize = int(para["Station Info"].get("chunksize"))
+    except ValueError:
+        if para["Station Info"].get("chunksize").lower() != "mon":
+            raise ValueError("Chunksize is invalid")
+
+        restrictions = Restrictions(
+            starttime = starttime,
+            endtime = endtime,
+            network = nw,
+            station = para["Station Info"].get("station", "*"),
+            channel_priorities = para["Station Info"].get("channelpri", "*").split(","),
+            reject_channels_with_gaps = False,
+            minimum_length = 0.0,
+            minimum_interstation_distance_in_m = 100.0)
+        
+    else:
+        restrictions = Restrictions(
+            starttime = starttime,
+            endtime = endtime,
+            chunklength_in_sec = chunksize * 24 * 60 * 60,
+            network = nw,
+            station = para["Station Info"].get("station", "*"),
+            channel_priorities = para["Station Info"].get("channelpri", "*").split(","),
+            reject_channels_with_gaps = False,
+            minimum_length = 0.0,
+            minimum_interstation_distance_in_m = 100.0)
 
     mdl = MassDownloader(providers=["IRIS"])
     mdl.download(
